@@ -29,11 +29,13 @@ curl https://openrouter.ai/api/v1/models \\
 1. Направьте DNS-запись `A` домена `proxy.fastclass.ru` на IP сервера.
 2. Установите Docker Engine и Docker Compose Plugin.
 3. Скопируйте `.env.example` в `.env` и задайте секреты.
-4. Запустите `docker compose up -d --build`.
+4. Если на сервере нет собственного Nginx, запустите bundled-вариант: `docker compose --profile bundled-nginx up -d --build`.
+
+Если Nginx уже установлен на сервере, запустите только прокси: `docker compose up -d --build proxy`. FastAPI будет доступен только локально на `127.0.0.1:${PORT}`.
 
 Контейнер Nginx сначала поднимается с временным сертификатом, чтобы пройти HTTP-01 challenge, затем автоматически получает сертификат Let's Encrypt и переключается на HTTPS. Продление выполняется каждые 12 часов с автоматической перезагрузкой Nginx.
 
-Порт FastAPI-прокси задается переменной `PORT` в `.env` и по умолчанию равен `8000`. Nginx автоматически использует этот порт как upstream.
+Порт FastAPI-прокси задается переменной `PORT` в `.env` и по умолчанию равен `8000`. Bundled Nginx автоматически использует этот порт как upstream.
 
 Открытые порты сервера: `80/tcp` и `443/tcp`.
 
