@@ -1,0 +1,45 @@
+services:
+  proxy:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    expose:
+      - "8000"
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  nginx:
+    build:
+      context: ./docker/nginx
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      UPSTREAM_HOST: proxy
+      UPSTREAM_PORT: 8000
+    depends_on:
+      proxy:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    networks:
+      - proxy
+
+networks:
+  proxy:
+
+volumes:
+  certbot-etc:
+  certbot-www:
