@@ -20,6 +20,7 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
     "host",
     "content-length",
+    "content-encoding",
 }
 
 SENSITIVE_REQUEST_HEADERS = {
@@ -51,7 +52,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     app = FastAPI(
         title="OpenRouter Proxy",
-        version="1.1.0",
+        version="1.1.1",
         lifespan=lifespan,
     )
 
@@ -67,9 +68,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     )
     async def openrouter_proxy(path: str, request: Request):
         if not is_authorized(request, configured_settings.ai_gateway_key):
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+            )
 
         body = await request.body()
+
         upstream_url = (
             f"{configured_settings.openrouter_base_url.rstrip('/')}/{path}"
         )
@@ -90,9 +95,12 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
             upstream_response = await client.send(upstream_request)
 
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             return JSONResponse(
-                {"error": "Upstream OpenRouter request failed"},
+                {
+                    "error": "Upstream OpenRouter request failed",
+                    "detail": str(exc),
+                },
                 status_code=502,
             )
 
@@ -106,11 +114,15 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.post("/telegram/sendMessage")
     async def telegram_send_message(request: Request):
         if not is_authorized(request, configured_settings.ai_gateway_key):
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+            )
 
         telegram_token = str(
             getattr(configured_settings, "telegram_bot_token", "")
         ).strip()
+
         telegram_user_id = str(
             getattr(configured_settings, "telegram_user_id", "")
         ).strip()
@@ -136,13 +148,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             )
 
         text = payload.get("text")
+
         if not isinstance(text, str) or not text.strip():
             return JSONResponse(
                 {"error": "Telegram message text is required"},
                 status_code=400,
             )
 
-        # Chat ID is always controlled by the proxy environment.
+        # Chat ID is controlled by the proxy environment.
         payload["chat_id"] = telegram_user_id
 
         telegram_url = (
@@ -157,12 +170,17 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 json=payload,
                 headers={
                     "Accept": "application/json",
+                    "Accept-Encoding": "identity",
                     "Content-Type": "application/json",
                 },
             )
-        except httpx.HTTPError:
+
+        except httpx.HTTPError as exc:
             return JSONResponse(
-                {"error": "Telegram upstream request failed"},
+                {
+                    "error": "Telegram upstream request failed",
+                    "detail": str(exc),
+                },
                 status_code=502,
             )
 
@@ -187,9 +205,10 @@ def get_gateway_key(request: Request) -> str:
 def is_authorized(request: Request, expected_key: str) -> bool:
     received_key = get_gateway_key(request)
 
-    return bool(received_key) and bool(expected_key) and secrets.compare_digest(
-        received_key,
-        expected_key,
+    return (
+        bool(received_key)
+        and bool(expected_key)
+        and secrets.compare_digest(received_key, expected_key)
     )
 
 
@@ -211,6 +230,11 @@ def build_upstream_headers(
         headers[name] = value
 
     headers["Authorization"] = f"Bearer {openrouter_api_key}"
+
+    # Do not allow OpenRouter/Cloudflare compression to create
+    # Content-Encoding mismatches after httpx processes the response.
+    headers["Accept-Encoding"] = "identity"
+
     return headers
 
 
