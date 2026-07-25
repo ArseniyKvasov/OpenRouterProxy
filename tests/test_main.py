@@ -12,6 +12,8 @@ def settings() -> Settings:
     return Settings(
         ai_gateway_key="gateway-secret",
         openrouter_api_key="openrouter-secret",
+        ai_gateway_key_2="gateway-secret-2",
+        openrouter_api_key_2="openrouter-secret-2",
     )
 
 
@@ -91,3 +93,32 @@ async def test_proxy_streams_upstream_response(settings: Settings):
     assert response.status_code == 200
     assert response.content == b"data: hello\n\n"
     mock_client.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_proxy_uses_second_key_pair(settings: Settings):
+    app = create_app(settings)
+    upstream_response = httpx.Response(
+        200,
+        headers={"content-type": "application/json"},
+        content=b"{}",
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+    )
+
+    mock_client = AsyncMock()
+    mock_client.build_request = httpx.AsyncClient().build_request
+    mock_client.send.return_value = upstream_response
+
+    async with app.router.lifespan_context(app):
+        app.state.http_client = mock_client
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/openrouter/chat/completions",
+                headers={"x-gateway-key": settings.ai_gateway_key_2},
+                content=b"{}",
+            )
+
+    assert response.status_code == 200
+    upstream_request = mock_client.send.await_args.args[0]
+    assert upstream_request.headers["Authorization"] == "Bearer openrouter-secret-2"

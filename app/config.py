@@ -5,7 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     ai_gateway_key: str
+    ai_gateway_key_2: str = ""
     openrouter_api_key: str
+    openrouter_api_key_2: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     request_timeout_seconds: float = 300.0
     connect_timeout_seconds: float = 15.0

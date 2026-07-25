@@ -6,7 +6,8 @@
 
 ```bash
 cp .env.example .env
-# Заполните AI_GATEWAY_KEY и OPENROUTER_API_KEY
+# Заполните AI_GATEWAY_KEY и OPENROUTER_API_KEY. При необходимости добавьте
+# вторую пару AI_GATEWAY_KEY_2 и OPENROUTER_API_KEY_2.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
@@ -44,6 +45,8 @@ curl https://openrouter.ai/api/v1/models \\
 - OpenRouter API-ключ никогда не передается клиенту и добавляется только на upstream-запросе.
 - Клиентский `Authorization` игнорируется.
 - Доступ к прокси разрешен только по `X-Gateway-Key` или `X-Gateway-Secret`.
+- Ключи `AI_GATEWAY_KEY` и `AI_GATEWAY_KEY_2` используют соответственно
+  `OPENROUTER_API_KEY` и `OPENROUTER_API_KEY_2`.
 - Секреты не должны попадать в Git: рабочий `.env` добавлен в `.gitignore`.
 
 ## Тесты

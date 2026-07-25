@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 import secrets
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import FastAPI, Request
@@ -67,11 +67,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
     async def openrouter_proxy(path: str, request: Request):
-        if not is_authorized(request, configured_settings.ai_gateway_key):
+        credentials = get_matching_credentials(request, configured_settings)
+        if credentials is None:
             return JSONResponse(
                 {"error": "Unauthorized"},
                 status_code=401,
             )
+
+        _, openrouter_api_key = credentials
 
         body = await request.body()
 
@@ -88,7 +91,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 params=request.query_params,
                 headers=build_upstream_headers(
                     request,
-                    configured_settings.openrouter_api_key,
+                    openrouter_api_key,
                 ),
                 content=body,
             )
@@ -113,7 +116,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     @app.post("/telegram/sendMessage")
     async def telegram_send_message(request: Request):
-        if not is_authorized(request, configured_settings.ai_gateway_key):
+        if get_matching_credentials(request, configured_settings) is None:
             return JSONResponse(
                 {"error": "Unauthorized"},
                 status_code=401,
@@ -210,6 +213,31 @@ def is_authorized(request: Request, expected_key: str) -> bool:
         and bool(expected_key)
         and secrets.compare_digest(received_key, expected_key)
     )
+
+
+def get_matching_credentials(
+    request: Request,
+    settings: Settings,
+) -> Optional[Tuple[str, str]]:
+    received_key = get_gateway_key(request)
+
+    if not received_key:
+        return None
+
+    credential_pairs = (
+        (settings.ai_gateway_key, settings.openrouter_api_key),
+        (settings.ai_gateway_key_2, settings.openrouter_api_key_2),
+    )
+
+    for gateway_key, openrouter_api_key in credential_pairs:
+        if (
+            gateway_key
+            and openrouter_api_key
+            and secrets.compare_digest(received_key, gateway_key)
+        ):
+            return gateway_key, openrouter_api_key
+
+    return None
 
 
 def build_upstream_headers(
