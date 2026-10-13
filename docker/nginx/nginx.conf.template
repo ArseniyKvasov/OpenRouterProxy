@@ -1,3 +1,11 @@
+# Do not persist query strings: LLM clients occasionally put credentials or
+# temporary URLs there. Request bodies and headers are not logged by this
+# format either. This template is included from nginx's `http` context.
+log_format safe_proxy '$remote_addr - $remote_user [$time_local] '
+                      '"$request_method $uri $server_protocol" $status '
+                      '$body_bytes_sent "$http_referer" "$http_user_agent"';
+access_log /var/log/nginx/access.log safe_proxy;
+
 server {
     listen 80;
     listen [::]:80;

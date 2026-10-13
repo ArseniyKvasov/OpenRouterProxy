@@ -25,6 +25,100 @@ curl https://openrouter.ai/api/v1/models \\
 Проксируемый путь повторяет путь OpenRouter с префиксом `/openrouter`, например:
 `POST /openrouter/chat/completions`.
 
+## Corporate LLM
+
+Обычные вызовы остаются полностью совместимыми: запрос без корпоративных
+заголовков уходит в OpenRouter по существующей паре ключей. Корпоративный
+режим включается только при одновременной передаче:
+
+- `X-Gateway-Key` (или `X-Gateway-Secret`) — ключ основного сервиса;
+- `X-Organization-ID` — ID организации;
+- `X-Organization-Context: Bearer <JWT>` — подписанный основной системой
+  короткоживущий контекст.
+
+JWT должен иметь `iss`, `aud=openrouter-proxy`, `exp`, `iat`, `jti`,
+`organization_id` и scope `corporate_llm:proxy`. Его срок от `iat` до `exp`
+не может превышать 5 минут; `organization_id` обязан совпасть с заголовком.
+Прокси получает ключи верификации из `CORPORATE_JWKS_URL`; разрешены только
+алгоритмы RS256 и ES256.
+
+В корпоративном режиме разрешены только следующие `POST`-пути:
+
+| Path | Operation |
+| --- | --- |
+| `/openrouter/chat/completions` | `chat_completions` |
+| `/openrouter/images/generations` | `image_generation` |
+| `/openrouter/audio/speech` | `audio_speech` |
+| `/openrouter/audio/transcriptions` | `audio_transcription` |
+
+SSE (`text/event-stream`) передаётся потоково, без буферизации; остальные
+ответы, включая multipart transcription и бинарные audio/image-ответы,
+пересылаются без изменения тела.
+
+### Contract with the main service
+
+Основной сервис хранит конфигурацию и шифрует API-ключ через KMS/Secret
+Manager. Он предоставляет прокси защищённый mTLS endpoint:
+
+```text
+GET /internal/llm-proxy/v1/organizations/{organization_id}/routes/{operation}
+Authorization: Bearer <CORPORATE_CONFIG_SERVICE_TOKEN>
+```
+
+Подключите сертификат, ключ и CA отдельным production Compose override-ом или
+оркестратором: контейнер запускается непривилегированным, поэтому файлы в
+`CORPORATE_CONFIG_*_FILE` должны быть смонтированы с правами чтения для UID
+`65534`. Для Docker Compose есть шаблон
+`docker-compose.corporate.example.yml`; заполните также три
+`*_HOST_PATH` и запускайте его вместе с базовым файлом. Базовый Compose
+намеренно не монтирует эти файлы и остаётся полностью совместимым с legacy
+OpenRouter-режимом.
+
+Успешный ответ строго имеет следующий вид. `base_url` — HTTPS URL корня
+OpenAI-совместимого API, без query и fragment; путь операции добавляет только
+прокси.
+
+```json
+{
+  "organization_id": "org_123",
+  "operation": "chat_completions",
+  "enabled": true,
+  "base_url": "https://llm.corp.example/v1",
+  "auth_scheme": "bearer",
+  "api_key": "plaintext-only-on-this-mtls-hop",
+  "version": "42"
+}
+```
+
+`auth_scheme` допускает только `bearer` и `api_key`. Хост из `base_url` должен
+быть в `CORPORATE_UPSTREAM_ALLOWED_HOSTS`; произвольные URL и headers не
+поддерживаются. `403`, `404` и `422` Config API означают
+`operation_not_configured`, остальные ошибки — fail closed.
+
+Redis не является источником истины: для corporate-режима обязательны
+`CORPORATE_REDIS_URL` и
+`CORPORATE_CACHE_ENCRYPTION_KEY` конфигурация кэшируется не более 60 секунд и
+API-ключ дополнительно шифруется Fernet. В production используйте `rediss`,
+ACL и Redis без persistence. При отзыве настройки основной сервис очищает
+кэш:
+
+```text
+POST /internal/corporate-cache/purge
+X-Internal-Cache-Key: <CORPORATE_CACHE_PURGE_KEY>
+Content-Type: application/json
+
+{"organization_id":"org_123","operation":"chat_completions"}
+```
+
+Поле `operation` опционально: при его отсутствии удаляются все четыре записи
+организации. Этот endpoint должен быть доступен только из внутренней сети
+основного сервиса.
+
+Корпоративные ошибки возвращаются как `{ "error": "…", "request_id": "…" }`:
+`corporate_context_invalid`, `organization_mismatch`,
+`operation_not_configured`, `corporate_upstream_unavailable` или
+`corporate_upstream_failed`.
+
 ## Деплой на `proxy.fastclass.ru`
 
 1. Направьте DNS-запись `A` домена `proxy.fastclass.ru` на IP сервера.
@@ -47,6 +141,12 @@ curl https://openrouter.ai/api/v1/models \\
 - Доступ к прокси разрешен только по `X-Gateway-Key` или `X-Gateway-Secret`.
 - Ключи `AI_GATEWAY_KEY` и `AI_GATEWAY_KEY_2` используют соответственно
   `OPENROUTER_API_KEY` и `OPENROUTER_API_KEY_2`.
+- Корпоративные ключи не передаются в JWT, браузер, обычные логи или upstream
+  headers клиента. В Config API они доступны только в ответе mTLS и в Redis
+  хранятся только зашифрованными.
+- Docker Compose отключает access log Uvicorn, а bundled Nginx записывает URL
+  без query string. Внешний Nginx должен применять тот же безопасный формат и
+  не публиковать `/internal/corporate-cache/purge` вне закрытой сети.
 - Секреты не должны попадать в Git: рабочий `.env` добавлен в `.gitignore`.
 
 ## Тесты
